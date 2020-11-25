@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - '*'
+
+jobs:
+  build:
+    name: ${{matrix.name}}
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os: [windows-2019, ubuntu-18.04]
+        include:
+          - os: windows-2019
+            name: windows
+          - os: ubuntu-18.04
+            name: linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            cl.exe //LD //Fe:2ds-switch.dll plugin.c
+          else
+            gcc plugin.c -shared -o 2ds-switch.so
+          fi
+      - name: Prepare to upload artifact
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE
+          mkdir artifact
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            cp 2ds-switch.dll artifact/
+          else
+            cp 2ds-switch.so artifact/
+          fi
+          cp license.txt artifact/
+      - name: Upload artifact
+        uses: actions/upload-artifact@v1
+        with:
+          name: ${{matrix.name}}
+          path: artifact
+  release:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-18.04
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/download-artifact@v2
+      - name: Set version output, create 7z files, and create zip files
+        id: step3
+        run: |
+          version=${GITHUB_REF:10}
+          echo "::set-output name=version::$version"
+
+          cd windows
+          7z a vvctre-plugin-2ds-switch-$version-windows.7z 2ds-switch.dll license.txt
+          7z a vvctre-plugin-2ds-switch-$version-windows.zip 2ds-switch.dll license.txt
+
+          cd ../linux
+          7z a vvctre-plugin-2ds-switch-$version-linux.7z 2ds-switch.so license.txt
+          7z a vvctre-plugin-2ds-switch-$version-linux.zip 2ds-switch.so license.txt
+      - name: Set commit_body output
+        id: step4
+        uses: actions/github-script@v3
+        with:
+          script: |
+            const child_process = require('child_process')
+            const commitBody = child_process.execSync('git log -1 --pretty="%b"', { cwd: process.env.GITHUB_WORKSPACE, encoding: 'utf8' })
+            core.setOutput('commit_body', commitBody.slice(0, -1))
+      - id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        with:
+          tag_name: ${{github.ref}}
+          release_name: ${{steps.step3.outputs.version}}
+          body: ${{steps.step4.outputs.commit_body}}
+          draft: false
+          prerelease: false
+      - name: Upload Windows 7z
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        with:
+          upload_url: ${{steps.create_release.outputs.upload_url}}
+          asset_path: ./windows/vvctre-plugin-2ds-switch-${{steps.step3.outputs.version}}-windows.7z
+          asset_name: vvctre-plugin-2ds-switch-${{steps.step3.outputs.version}}-windows.7z
+          asset_content_type: application/x-7z-compressed
+      - name: Upload Windows zip
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        with:
+          upload_url: ${{steps.create_release.outputs.upload_url}}
+          asset_path: ./windows/vvctre-plugin-2ds-switch-${{steps.step3.outputs.version}}-windows.zip
+          asset_name: vvctre-plugin-2ds-switch-${{steps.step3.outputs.version}}-windows.zip
+          asset_content_type: application/zip
+      - name: Upload Linux 7z
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        with:
+          upload_url: ${{steps.create_release.outputs.upload_url}}
+          asset_path: ./linux/vvctre-plugin-2ds-switch-${{steps.step3.outputs.version}}-linux.7z
+          asset_name: vvctre-plugin-2ds-switch-${{steps.step3.outputs.version}}-linux.7z
+          asset_content_type: application/x-7z-compressed
+      - name: Upload Linux zip
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+        with:
+          upload_url: ${{steps.create_release.outputs.upload_url}}
+          asset_path: ./linux/vvctre-plugin-2ds-switch-${{steps.step3.outputs.version}}-linux.zip
+          asset_name: vvctre-plugin-2ds-switch-${{steps.step3.outputs.version}}-linux.zip
+          asset_content_type: application/zip
